@@ -10,11 +10,31 @@ pub enum Kernel {
     SimdMulti(usize), // number of vectors per stride
 }
 
-fn scalar_read(slice: &[u32], stride: usize) -> u64 {
+pub fn scalar_read(slice: &[u32], stride: usize) -> u64 {
     let mut sum = 0u64;
-    for i in (0..slice.len()).step_by(stride) {
-        sum = sum.wrapping_add(slice[i] as u64);
+    let len = slice.len();
+
+    // Process 4 elements per iteration
+    let unroll = 4;
+    let main_iterations = len / (stride * unroll);
+    let mut i = 0;
+
+    // Main loop with 4x unrolling
+    for _ in 0..main_iterations {
+        sum = sum
+            .wrapping_add(slice[i] as u64)
+            .wrapping_add(slice[i + stride] as u64)
+            .wrapping_add(slice[i + stride * 2] as u64)
+            .wrapping_add(slice[i + stride * 3] as u64);
+        i += stride * unroll;
     }
+
+    // Handle remaining elements
+    while i < len {
+        sum = sum.wrapping_add(slice[i] as u64);
+        i += stride;
+    }
+
     sum
 }
 
