@@ -242,12 +242,7 @@ fn main() {
     };
 
     let kernel = if args.simd {
-        if stride_bytes >= 64 {
-            // If stride is at least a cache line
-            Kernel::SimdMulti(4) // Use 4 vectors per stride by default
-        } else {
-            Kernel::Simd
-        }
+        Kernel::Simd
     } else {
         Kernel::Scalar
     };

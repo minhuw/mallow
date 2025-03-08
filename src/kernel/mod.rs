@@ -1,4 +1,4 @@
-use std::simd::u32x16;
+use std::simd::{u32x8, usizex8};
 
 #[derive(Clone, Debug)]
 pub enum Kernel {
@@ -6,8 +6,6 @@ pub enum Kernel {
     Scalar,
     // Strided access with SIMD operations
     Simd,
-    // SIMD stride with multiple vectors per iteration
-    SimdMulti(usize), // number of vectors per stride
 }
 
 pub fn scalar_read(slice: &[u32], stride: usize) -> u64 {
@@ -38,27 +36,26 @@ pub fn scalar_read(slice: &[u32], stride: usize) -> u64 {
     sum
 }
 
-fn simd_read(slice: &[u32], stride: usize) -> u64 {
-    let mut sum = u32x16::splat(0);
-    for i in (0..slice.len()).step_by(stride * 16) {
-        if i + 16 <= slice.len() {
-            sum += u32x16::from_slice(&slice[i..i + 16]);
-        }
-    }
-    sum.horizontal_sum() as u64
-}
+pub fn simd_read(slice: &[u32], stride: usize) -> u64 {
+    let mut sum: u64 = 0;
 
-fn simd_read_multi(slice: &[u32], stride: usize, vectors_per_stride: usize) -> u64 {
-    let mut sums = vec![u32x16::splat(0); vectors_per_stride];
-    for base in (0..slice.len()).step_by(stride * vectors_per_stride * 16) {
-        for (i, sum) in sums.iter_mut().enumerate() {
-            let idx = base + i * stride;
-            if idx + 16 <= slice.len() {
-                *sum += u32x16::from_slice(&slice[idx..idx + 16]);
-            }
-        }
+    // Create indices for gather: [0*stride, 1*stride, 2*stride, ..., 15*stride]
+    let indices: [usize; 8] = std::array::from_fn(|i| i * stride);
+
+    // Process strided elements in chunks
+    let mut base = 0;
+    while base + (7 * stride) < slice.len() {
+        // Offset each index by the base
+        let gather_indices = usizex8::from_array(indices.map(|i| i + base));
+
+        // Gather values from strided locations
+
+        sum += u32x8::gather_or_default(&slice[base..], gather_indices).horizontal_sum() as u64;
+
+        base += stride * 8;
     }
-    sums.iter().map(|v| v.horizontal_sum() as u64).sum()
+
+    sum
 }
 
 impl Kernel {
@@ -66,9 +63,6 @@ impl Kernel {
         match self {
             Kernel::Scalar => scalar_read(slice, stride),
             Kernel::Simd => simd_read(slice, stride),
-            Kernel::SimdMulti(vectors_per_stride) => {
-                simd_read_multi(slice, stride, *vectors_per_stride)
-            }
         }
     }
 }
@@ -78,7 +72,7 @@ trait SimdExt {
     fn horizontal_sum(self) -> u32;
 }
 
-impl SimdExt for u32x16 {
+impl SimdExt for u32x8 {
     fn horizontal_sum(self) -> u32 {
         let arr = self.to_array();
         arr.iter().sum()
