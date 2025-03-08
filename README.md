@@ -46,6 +46,16 @@ A Rust project demonstrating SIMD (Single Instruction, Multiple Data) operations
 cargo test
 ```
 
+## Example Usage
+
+The tool provides various options to benchmark memory bandwidth:
+
+```bash
+# Basic sequential benchmark with default settings
+cargo run --release
+```
+
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details. 
