@@ -54,7 +54,9 @@ struct Args {
 }
 
 fn measure_memory_bandwidth(config: &BenchmarkConfig) -> (f64, f64, usize) {
-    let data: Vec<u32> = (0..config.size).map(|i| i as u32).collect();
+    // Convert byte size to number of u32 elements
+    let num_elements = config.size / std::mem::size_of::<u32>();
+    let data: Vec<u32> = (0..num_elements).map(|i| i as u32).collect();
     let data = Arc::new(data);
     let core_ids = config.core_ids.clone();
 
@@ -193,9 +195,9 @@ fn main() {
     }
     println!();
 
-    // Convert MiB to number of u32 elements
-    let size = args.size * 1024 * 1024 / std::mem::size_of::<u32>();
-    let size_mb = (size * std::mem::size_of::<u32>()) as f64 / 1_000_000.0;
+    // Convert MiB to bytes (not number of elements)
+    let size = args.size * 1024 * 1024;
+    let size_mib = size as f64 / (1024.0 * 1024.0);
 
     let kernel = if args.simd {
         Kernel::Simd
@@ -234,7 +236,7 @@ fn main() {
     let (bandwidth, _sum, iterations) = measure_memory_bandwidth(&config);
 
     benchmark_results.results.push(BenchmarkResult {
-        size_mb,
+        size_mib,
         bandwidth_gb_s: bandwidth,
         simd_enabled: matches!(config.kernel, Kernel::Simd),
         parallel_enabled: config.thread_count > 1,

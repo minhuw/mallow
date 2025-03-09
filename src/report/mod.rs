@@ -18,7 +18,7 @@ pub struct BenchmarkConfig {
 
 #[derive(Serialize)]
 pub struct BenchmarkResult {
-    pub size_mb: f64,
+    pub size_mib: f64,
     pub bandwidth_gb_s: f64,
     pub simd_enabled: bool,
     pub parallel_enabled: bool,
@@ -40,11 +40,11 @@ pub fn print_results(results: &BenchmarkResults, format: &str) {
             println!("{}", serde_json::to_string_pretty(&results).unwrap());
         }
         "csv" => {
-            println!("size_mb,bandwidth_gb_s,simd,parallel,affinity,threads,iterations");
+            println!("size_mib,bandwidth_gb_s,simd,parallel,affinity,threads,iterations");
             for result in &results.results {
                 println!(
                     "{:.1},{:.2},{},{},{},{},{}",
-                    result.size_mb,
+                    result.size_mib,
                     result.bandwidth_gb_s,
                     result.simd_enabled,
                     result.parallel_enabled,
@@ -91,8 +91,12 @@ pub fn print_results(results: &BenchmarkResults, format: &str) {
                     result.simd_enabled, result.parallel_enabled, result.affinity_enabled
                 );
                 println!(
-                    "{:.1} MB\t{:.2} GB/s\t{}\t{}\t{}",
-                    result.size_mb, result.bandwidth_gb_s, flags, result.threads, result.iterations
+                    "{:.1} MiB\t{:.2} GB/s\t{}\t{}\t{}",
+                    result.size_mib,
+                    result.bandwidth_gb_s,
+                    flags,
+                    result.threads,
+                    result.iterations
                 );
             }
         }
