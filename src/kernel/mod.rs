@@ -1,6 +1,7 @@
+use serde::Serialize;
 use std::simd::{u32x8, usizex8};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub enum Kernel {
     // Strided access with scalar operations
     Scalar,
@@ -40,17 +41,13 @@ pub fn simd_read(slice: &[u32], stride: usize) -> u64 {
     let mut sum: u64 = 0;
 
     // Create indices for gather: [0*stride, 1*stride, 2*stride, ..., 15*stride]
-    let indices: [usize; 8] = std::array::from_fn(|i| i * stride);
+    let indices = usizex8::from_array(std::array::from_fn(|i| i * stride));
 
     // Process strided elements in chunks
     let mut base = 0;
     while base + (7 * stride) < slice.len() {
-        // Offset each index by the base
-        let gather_indices = usizex8::from_array(indices.map(|i| i + base));
-
         // Gather values from strided locations
-
-        sum += u32x8::gather_or_default(&slice[base..], gather_indices).horizontal_sum() as u64;
+        sum += u32x8::gather_or_default(&slice[base..], indices).horizontal_sum() as u64;
 
         base += stride * 8;
     }
