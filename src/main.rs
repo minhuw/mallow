@@ -1,9 +1,11 @@
 #![feature(portable_simd)]
 use clap::Parser;
 use core_affinity::{get_core_ids, set_for_current};
+use rand::Rng;
 use std::sync::Arc;
+use std::sync::Barrier;
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 mod kernel;
 mod report;
@@ -12,6 +14,16 @@ mod system;
 use kernel::Kernel;
 use report::{print_results, BenchmarkConfig, BenchmarkResult, BenchmarkResults};
 use system::cpu_info::get_cpu_info;
+
+#[derive(Clone, Debug, clap::ValueEnum)]
+pub enum Operation {
+    /// Read-only benchmark
+    Read,
+    /// Write-only benchmark
+    Write,
+    /// Read and write benchmark
+    ReadWrite,
+}
 
 #[derive(Parser)]
 #[command(author, version, about = "Memory bandwidth benchmark tool")]
@@ -27,6 +39,10 @@ struct Args {
     /// Duration of measurement in seconds
     #[arg(short, long, default_value_t = 10.0)]
     duration: f64,
+
+    /// Operation type (read, write, or readwrite)
+    #[arg(short, long, value_enum, default_value_t = Operation::Read)]
+    operation: Operation,
 
     /// Number of warmup iterations
     #[arg(short, long, default_value_t = 5)]
@@ -56,14 +72,14 @@ struct Args {
 fn measure_memory_bandwidth(config: &BenchmarkConfig) -> (f64, f64, usize) {
     // Convert byte size to number of u32 elements
     let num_elements = config.size / std::mem::size_of::<u32>();
-    let data: Vec<u32> = (0..num_elements).map(|i| i as u32).collect();
-    let data = Arc::new(data);
-    let core_ids = config.core_ids.clone();
+    let barrier = Arc::new(Barrier::new(config.thread_count));
+    let start_signal = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let mut handles = vec![];
     for thread_id in 0..config.thread_count {
-        let data = Arc::clone(&data);
-        let core_ids = core_ids.clone();
+        let barrier = Arc::clone(&barrier);
+        let start_signal = Arc::clone(&start_signal);
+        let core_ids = config.core_ids.clone();
         let kernel = config.kernel.clone();
         let config = config.clone();
 
@@ -73,33 +89,58 @@ fn measure_memory_bandwidth(config: &BenchmarkConfig) -> (f64, f64, usize) {
                 let _ = set_for_current(core_id);
             }
 
-            let slice = &data[..];
+            // Each thread creates its own buffer
+            let mut rng = rand::rng();
+            let mut data: Vec<u32> = (0..num_elements).map(|_| rng.random()).collect();
+
+            // Wait for all threads to finish initialization
+            barrier.wait();
 
             // Warmup
             for _ in 0..config.warmup_iterations {
-                kernel.run(slice, config.stride);
+                kernel.run(&mut data, config.stride);
             }
 
-            let start = Instant::now();
+            // Wait for all threads to finish warmup
+            barrier.wait();
+
+            // First thread sets the start signal
+            if thread_id == 0 {
+                start_signal.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+
+            // Wait for start signal
+            while !start_signal.load(std::sync::atomic::Ordering::SeqCst) {
+                std::hint::spin_loop();
+            }
+
+            let thread_start = Instant::now();
             let mut total_sum = 0u64;
             let mut iterations = 0usize;
 
-            while start.elapsed().as_secs_f64() < config.duration_secs {
-                total_sum = total_sum.wrapping_add(kernel.run(slice, config.stride));
+            while thread_start.elapsed().as_secs_f64() < config.duration_secs {
+                total_sum = total_sum.wrapping_add(kernel.run(&mut data, config.stride));
                 iterations += 1;
             }
 
-            (total_sum as f64, iterations)
+            let thread_elapsed = thread_start.elapsed();
+
+            (total_sum as f64, iterations, thread_elapsed)
         });
         handles.push(handle);
     }
 
-    let start = Instant::now();
-    let results: Vec<(f64, usize)> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-    let elapsed = start.elapsed();
+    let results: Vec<(f64, usize, Duration)> =
+        handles.into_iter().map(|h| h.join().unwrap()).collect();
 
-    let total_sum: f64 = results.iter().map(|(sum, _)| sum).sum();
-    let total_iterations: usize = results.iter().map(|(_, iters)| iters).sum();
+    // Use the maximum elapsed time across all threads
+    let elapsed = results
+        .iter()
+        .map(|(_, _, elapsed)| *elapsed)
+        .max()
+        .unwrap();
+    let total_sum: f64 = results.iter().map(|(sum, _, _)| sum).sum();
+    let total_iterations: usize = results.iter().map(|(_, iters, _)| *iters).sum();
 
     // Calculate actual number of elements accessed with stride
     let elements_per_iteration = std::cmp::min(
@@ -118,15 +159,15 @@ fn measure_memory_bandwidth(config: &BenchmarkConfig) -> (f64, f64, usize) {
     // Each access fetches exactly one cache line, regardless of stride
     let bytes_processed = (elements_per_iteration * cache_line_size * total_iterations) as f64;
     let seconds = elapsed.as_secs_f64();
-    let bandwidth = bytes_processed / seconds / 1_000_000_000.0;
+    let bandwidth = bytes_processed / seconds / (1024.0 * 1024.0 * 1024.0); // Convert to GiB/s
 
     println!("\nBandwidth Calculation Details:");
     println!("  Cache line size: {} bytes", cache_line_size);
     println!("  Elements per iteration: {}", elements_per_iteration);
     println!("  Total iterations: {}", total_iterations);
     println!(
-        "  Total bytes processed: {:.2} GB",
-        bytes_processed / 1_000_000_000.0
+        "  Total bytes processed: {:.2} GiB",
+        bytes_processed / (1024.0 * 1024.0 * 1024.0)
     );
     println!("  Elapsed time: {:.3} seconds", seconds);
     if config.thread_count > 1 {
@@ -134,11 +175,11 @@ fn measure_memory_bandwidth(config: &BenchmarkConfig) -> (f64, f64, usize) {
             "  Average iterations per thread: {:.1}",
             total_iterations as f64 / config.thread_count as f64
         );
-        for (thread_id, (_, iters)) in results.iter().enumerate() {
+        for (thread_id, (_, iters, _)) in results.iter().enumerate() {
             println!("    Thread {}: {} iterations", thread_id, iters);
         }
     }
-    println!("  Bandwidth: {:.2} GB/s\n", bandwidth);
+    println!("  Bandwidth: {:.2} GiB/s\n", bandwidth);
 
     (bandwidth, total_sum, total_iterations)
 }
@@ -199,10 +240,15 @@ fn main() {
     let size = args.size * 1024 * 1024;
     let size_mib = size as f64 / (1024.0 * 1024.0);
 
-    let kernel = if args.simd {
-        Kernel::Simd
-    } else {
-        Kernel::Scalar
+    let kernel = match (args.operation, args.simd) {
+        (Operation::Read, false) => Kernel::ScalarRead,
+        (Operation::Read, true) => Kernel::SimdRead,
+        (Operation::Write, false) => Kernel::ScalarWrite,
+        (Operation::Write, true) => Kernel::SimdWrite,
+        (Operation::ReadWrite, _) => {
+            println!("ReadWrite operation not yet implemented");
+            std::process::exit(1);
+        }
     };
 
     let thread_count = if args.parallel {
@@ -237,8 +283,8 @@ fn main() {
 
     benchmark_results.results.push(BenchmarkResult {
         size_mib,
-        bandwidth_gb_s: bandwidth,
-        simd_enabled: matches!(config.kernel, Kernel::Simd),
+        bandwidth_gib_s: bandwidth,
+        simd_enabled: matches!(config.kernel, Kernel::SimdRead | Kernel::SimdWrite),
         parallel_enabled: config.thread_count > 1,
         affinity_enabled: !config.core_ids.is_empty(),
         iterations,
