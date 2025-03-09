@@ -2,14 +2,6 @@
 
 [![CI](https://github.com/minhuw/mallow/actions/workflows/ci.yml/badge.svg)](https://github.com/minhuw/mallow/actions/workflows/ci.yml)
 
-A Rust project demonstrating SIMD (Single Instruction, Multiple Data) operations using Rust's portable SIMD feature.
-
-## Features
-
-- Vectorized operations using SIMD instructions
-- Cross-platform support (Windows, macOS, Linux)
-- Optimized for performance with SIMD parallelism
-
 ## Requirements
 
 - Rust nightly toolchain (for portable SIMD support)
@@ -39,12 +31,6 @@ A Rust project demonstrating SIMD (Single Instruction, Multiple Data) operations
    ```bash
    cargo run --release
    ```
-
-## Running Tests
-
-```bash
-cargo test
-```
 
 ## Example Usage
 
